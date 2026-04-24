@@ -15,7 +15,7 @@ Classify news into Fake or Real + explain predictions.
 
 ## Run
 pip install -r requirements.txt
-python main.py
+streamlit run streamlit_app.py
 
 ## Output
 - Accuracy / Precision / Recall / F1
