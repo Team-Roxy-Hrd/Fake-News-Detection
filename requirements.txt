@@ -1,0 +1,20 @@
+# Core UI
+streamlit
+
+# Data
+pandas
+numpy
+
+# ML utilities
+scikit-learn
+joblib
+
+# Visualization
+matplotlib
+seaborn
+
+# Deep learning
+tensorflow
+
+# NLP (needed to regenerate data/processed/cleaned_fake_news.csv)
+nltk

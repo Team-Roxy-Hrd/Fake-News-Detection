@@ -1,10 +1,13 @@
 import streamlit as st
 import pandas as pd
 import joblib
-import numpy as np
 
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+try:
+    from tensorflow.keras.models import load_model
+    from tensorflow.keras.preprocessing.sequence import pad_sequences
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
 
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
@@ -30,31 +33,34 @@ def load_models():
     try:
         log_model = joblib.load("outputs/models/logistic_model.pkl")
         tfidf = joblib.load("outputs/models/tfidf_vectorizer.pkl")
-        lstm_model = load_model("outputs/models/lstm_model.h5")
-        tokenizer = joblib.load("outputs/models/tokenizer.pkl")
-        return log_model, tfidf, lstm_model, tokenizer
     except FileNotFoundError as e:
         st.error(f"Model file not found: {e}. Run training first.")
         st.stop()
+
+    lstm_model = None
+    tokenizer = None
+    if TF_AVAILABLE:
+        try:
+            lstm_model = load_model("outputs/models/lstm_model.h5")
+            tokenizer = joblib.load("outputs/models/tokenizer.pkl")
+        except Exception as e:
+            st.warning(f"LSTM model could not be loaded: {e}. LSTM features disabled.")
+    else:
+        st.warning("TensorFlow is not installed (Python 3.13 is not yet supported). LSTM features are disabled.")
+
+    return log_model, tfidf, lstm_model, tokenizer
 
 
 @st.cache_data
 def load_stats():
     try:
         return pd.read_csv("data/processed/cleaned_fake_news.csv")
-    except FileNotFoundError as e:
-        st.error(f"Data file not found: {e}.")
-        st.stop()
+    except FileNotFoundError:
+        return None
 
 
 log_model, tfidf, lstm_model, tokenizer = load_models()
 df_stats = load_stats()
-
-total = len(df_stats)
-fake_count = df_stats[df_stats["label"] == 1].shape[0]
-real_count = df_stats[df_stats["label"] == 0].shape[0]
-fake_ratio = (fake_count / total) * 100
-real_ratio = (real_count / total) * 100
 
 
 def predict_lr(text):
@@ -107,14 +113,23 @@ def plot_cm(preds, y, title):
     st.pyplot(fig)
 
 
-st.subheader("📊 Dataset Statistics")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Total Articles", total)
-with col2:
-    st.metric("Fake News", f"{fake_count} ({fake_ratio:.2f}%)")
-with col3:
-    st.metric("Real News", f"{real_count} ({real_ratio:.2f}%)")
+if df_stats is not None:
+    total = len(df_stats)
+    fake_count = df_stats[df_stats["label"] == 1].shape[0]
+    real_count = df_stats[df_stats["label"] == 0].shape[0]
+    fake_ratio = (fake_count / total) * 100
+    real_ratio = (real_count / total) * 100
+
+    st.subheader("📊 Dataset Statistics")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Articles", total)
+    with col2:
+        st.metric("Fake News", f"{fake_count} ({fake_ratio:.2f}%)")
+    with col3:
+        st.metric("Real News", f"{real_count} ({real_ratio:.2f}%)")
+else:
+    st.info("Dataset statistics unavailable — `data/processed/cleaned_fake_news.csv` not found. Run the preprocessing notebook to generate it.")
 
 st.markdown("---")
 
@@ -130,7 +145,7 @@ if st.button("Load Sample"):
 
 text = st.text_area("Enter News Article", value=st.session_state.get("text", ""))
 
-if st.checkbox("📊 Show Confusion Matrix"):
+if df_stats is not None and lstm_model is not None and st.checkbox("📊 Show Confusion Matrix"):
     texts = df_stats["clean_text"].tolist()
     labels = df_stats["label"].values
     lr_preds, lstm_preds = get_cm_predictions(texts, labels)
@@ -138,18 +153,41 @@ if st.checkbox("📊 Show Confusion Matrix"):
     plot_cm(lr_preds, labels, "Logistic Regression")
     st.subheader("LSTM Confusion Matrix")
     plot_cm(lstm_preds, labels, "LSTM Model")
+elif df_stats is None or lstm_model is None:
+    st.info("📊 Confusion Matrix unavailable — requires the dataset file and TensorFlow.")
 
 if st.button("Analyze"):
     if not text.strip():
         st.warning("Please enter text")
     else:
         lr_label, lr_conf, lr_reasons = predict_lr(text)
-        lstm_label, lstm_conf = predict_lstm(text)
 
-        st.subheader("🔍 Model Comparison")
-        col1, col2 = st.columns(2)
+        st.subheader("🔍 Model Results")
 
-        with col1:
+        if lstm_model is not None:
+            lstm_label, lstm_conf = predict_lstm(text)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### 🟢 Logistic Regression (TF-IDF)")
+                show_result(lr_label, lr_conf)
+                st.progress(int(lr_conf))
+                st.write("**Important Words:**")
+                for w, score in lr_reasons:
+                    if score > 0:
+                        st.write(f"🔴 {w} → FAKE influence ({score:.2f})")
+                    else:
+                        st.write(f"🟢 {w} → REAL influence ({score:.2f})")
+            with col2:
+                st.markdown("### 🔵 LSTM (GloVe)")
+                show_result(lstm_label, lstm_conf)
+                st.progress(int(lstm_conf))
+                st.caption("Word-level attribution is not available for this LSTM architecture.")
+            st.markdown("---")
+            if lr_label == lstm_label:
+                st.success(f"✔ Both models agree: {lr_label}")
+            else:
+                st.warning("⚠ Models disagree — LSTM captures deeper context")
+        else:
             st.markdown("### 🟢 Logistic Regression (TF-IDF)")
             show_result(lr_label, lr_conf)
             st.progress(int(lr_conf))
@@ -159,16 +197,5 @@ if st.button("Analyze"):
                     st.write(f"🔴 {w} → FAKE influence ({score:.2f})")
                 else:
                     st.write(f"🟢 {w} → REAL influence ({score:.2f})")
-
-        with col2:
-            st.markdown("### 🔵 LSTM (GloVe)")
-            show_result(lstm_label, lstm_conf)
-            st.progress(int(lstm_conf))
-            st.caption("Word-level attribution is not available for this LSTM architecture.")
-
-        st.markdown("---")
-
-        if lr_label == lstm_label:
-            st.success(f"✔ Both models agree: {lr_label}")
-        else:
-            st.warning("⚠ Models disagree — LSTM captures deeper context")
+            st.markdown("---")
+            st.info("LSTM model unavailable — showing Logistic Regression result only.")
