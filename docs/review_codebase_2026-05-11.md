@@ -1,123 +1,257 @@
 ```
 ══════════════════════════════════════════════════════════════
   CODE REVIEW REPORT
-  Reviewed: Full Codebase (ui.py, notebooks/00–03, requirements.txt, README.md)
+  Reviewed: notebooks/00_eda.ipynb, 01_preprocessing.ipynb,
+            02_LG_TF-IDF.ipynb, 03_LSTM_GLOVE.ipynb
   Date: 2026-05-11
-  Domain: AI/ML · DS · WEB (Streamlit)    Language: Python
+  Domain: AI / DS (NLP, Machine Learning)
+  Language: Python (Jupyter Notebooks)
 ══════════════════════════════════════════════════════════════
 ```
-
 ## Summary
 
-```
-Total issues found: 15
-🔴 Critical: 0    🟠 High: 2    🟡 Medium: 7    🟢 Low: 3    🔵 Info: 3
+  Total issues found: 12
+  🔴 Critical:  2    🟠 High: 3    🟡 Medium: 3    🟢 Low: 2    🔵 Info: 2
 
-Overall health: NEEDS WORK
-```
+  Overall health: NEEDS WORK
 
-The project has a clean, well-structured ML pipeline — data flows correctly from raw CSVs through cleaning, feature extraction, model training, and a Streamlit UI. The most pressing concerns are reproducibility gaps (no TF seed, empty `requirements.txt`) that prevent re-running or verifying results — critical for academic work. A recurring pattern across notebooks is the absence of standard ML safeguards: no early stopping, non-stratified validation split, and no cross-validation. The UI (`ui.py`) is in good shape after recent fixes; most remaining issues live in the notebooks and project configuration.
+  The pipeline is structurally sound — data flows cleanly from raw CSVs
+  through preprocessing to model training, TF-IDF is correctly fit only
+  on training data, the tokenizer is also fit only on training data, and
+  both models are evaluated with the right metrics. The two critical
+  issues are in the explainability functions: both the Logistic Regression
+  and LSTM "explain" functions return essentially all words in the input
+  rather than the top contributing words, which directly fails the most
+  distinctive graded requirement ("explain why classified as fake/real").
+  Fixing those two functions is the only work required before submission.
+  The remaining issues are best-practice gaps (reproducibility, early
+  stopping, EDA quality) that are easy to address.
 
----
-
+────────────────────────────────────────────────────────────
 ## Issues — Ranked by Severity
+────────────────────────────────────────────────────────────
 
----
+### 🔴 CRITICAL — Issue #1: LR Explainability Returns All Vocabulary Words, Not Top Contributors
 
-### 🟠 HIGH — Issue #1: `requirements.txt` Is Empty
-
-**Location:** `requirements.txt`
-**Dimension:** Reproducibility / AI-ML
+**Location:** `notebooks/02_LG_TF-IDF.ipynb` — cell-7 (`explain` function)
+**Dimension:** AI-ML / Correctness
 
 **Problem:**
-The file exists but has no content. Anyone trying to reproduce the project must manually guess all dependencies (`tensorflow`, `scikit-learn`, `streamlit`, `pandas`, `numpy`, `joblib`, `nltk`, `seaborn`, `matplotlib`) and their compatible versions. For academic submission this means the grader cannot reproduce results without significant guesswork.
+The `explain` function checks whether each raw input word exists anywhere in
+`word_score` (a dict of all 5000 TF-IDF features). Because `word_score` is built
+from all features, nearly every common word passes the filter, so the function
+returns most of the input text as "important words." Additionally, `text.split()`
+is not lowercased before comparison, so capitalised words like `"Breaking"` will
+NOT match the lowercase TF-IDF feature `"breaking"`, making results inconsistent.
+The project requirement explicitly requires showing which words DROVE the
+classification decision — this function does not do that.
 
 **Example of the problem:**
-```
-# requirements.txt is completely empty
+```python
+word_score = dict(zip(features, weights))   # all 5000 features included
+
+def explain(text):
+    vec = tfidf.transform([text])
+    pred = model.predict(vec)[0]
+    words = text.split()                    # not lowercased — case mismatch
+    important_words = [w for w in words if w in word_score]  # any vocab word passes
+    label = "Fake" if pred == 1 else "Real"
+    return label, important_words
 ```
 
 **Best Fix:**
-Generate from the current environment and pin major versions. Exact pins (`==`) are best for reproducibility; compatible-release (`~=`) is acceptable for flexibility.
+Transform the text with TF-IDF, multiply non-zero feature values by the model
+coefficient for that feature to get each word's signed contribution to the
+prediction, then return only the top N by magnitude. This gives genuinely
+informative reasons.
 
-```
-# requirements.txt
-pandas~=2.0
-numpy~=1.24
-scikit-learn~=1.3
-tensorflow~=2.13
-streamlit~=1.28
-joblib~=1.3
-nltk~=3.8
-matplotlib~=3.7
-seaborn~=0.12
-```
+```python
+def explain(text, top_n=10):
+    cleaned = clean_text(text)              # reuse existing preprocessing
+    vec = tfidf.transform([cleaned])
+    pred = model.predict(vec)[0]
+    label = "Fake" if pred == 1 else "Real"
 
-Generate automatically: `pip freeze > requirements.txt` then prune to direct dependencies only.
+    feature_indices = vec.nonzero()[1]
+    contributions = [
+        (features[i], weights[i] * vec[0, i])
+        for i in feature_indices
+    ]
+    contributions.sort(key=lambda x: abs(x[1]), reverse=True)
+    important_words = [word for word, _ in contributions[:top_n]]
+
+    return label, important_words
+```
 
 ---
 
-### 🟠 HIGH — Issue #2: No TensorFlow Random Seed — Non-Reproducible LSTM Training
+### 🔴 CRITICAL — Issue #2: LSTM Explainability Returns All Known Words, Not Prediction-Contributing Words
 
-**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-7 (model build), cell-9 (training)
+**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-17 (`explain_text` function)
+**Dimension:** AI-ML / Correctness
+
+**Problem:**
+The `explain_text` function returns every word from the input that exists in the
+tokenizer's 20,000-word vocabulary. For a 50–100 word cleaned news snippet, almost
+all words will be in that vocabulary, so the output is nearly the entire input text.
+This satisfies neither the requirement ("important words or patterns that led to
+classification") nor the example in the spec ("Reason: 'you won't believe',
+'breaking'"). The function does not measure individual word contributions at all.
+
+**Example of the problem:**
+```python
+def explain_text(text):
+    seq = tokenizer.texts_to_sequences([text])
+    padded = pad_sequences(seq, maxlen=300)
+    pred = model.predict(padded)[0][0]
+    label = "Fake" if pred > 0.5 else "Real"
+
+    words = text.lower().split()
+    # Returns EVERY word in the vocabulary — not the ones that matter
+    important_words = [w for w in words if w in tokenizer.word_index]
+    return label, important_words
+```
+
+**Best Fix:**
+For an LSTM without attention layers, use input perturbation: blank out each word
+one at a time, measure how much the prediction probability drops, and rank words by
+their impact. This is simple, requires no extra libraries, and is genuinely
+meaningful.
+
+```python
+def explain_text(text, top_n=10):
+    words = text.lower().split()
+
+    def predict_prob(word_list):
+        seq = tokenizer.texts_to_sequences([" ".join(word_list)])
+        padded = pad_sequences(seq, maxlen=300)
+        return model.predict(padded, verbose=0)[0][0]
+
+    base_prob = predict_prob(words)
+    scores = []
+    for i, word in enumerate(words):
+        masked = words[:i] + ["<OOV>"] + words[i+1:]
+        delta = base_prob - predict_prob(masked)
+        scores.append((word, delta))
+
+    scores.sort(key=lambda x: abs(x[1]), reverse=True)
+    label = "Fake" if base_prob > 0.5 else "Real"
+    important_words = [w for w, _ in scores[:top_n]]
+    return label, important_words
+```
+
+> Note: Perturbation adds one inference call per word. For short cleaned texts
+> (~100 words) this takes a few seconds — acceptable for a demo. If speed matters,
+> pre-filter to top-20 words by TF-IDF weight before perturbing.
+
+---
+
+### 🟠 HIGH — Issue #3: EDA Word Frequency Analysis Includes Stopwords — Insights Are Meaningless
+
+**Location:** `notebooks/00_eda.ipynb` — cell-13 and cell-15
+**Dimension:** AI-ML / Correctness
+
+**Problem:**
+The "most common words" analysis uses a simple `re.findall(r"\b[a-z]{3,}\b", ...)`
+regex with no stopword removal. The top-20 words for both Fake and Real news are
+therefore identical filler words: "the", "and", "that", "for", etc. This completely
+defeats the purpose of the analysis — the project spec says "Fake news often uses
+exaggerated words (e.g., 'shocking', 'unbelievable')" but the current output will
+never surface those words because stopwords dominate.
+
+**Example of the problem:**
+```python
+# Top 20 fake news words shown: 'the', 'and', 'that', 'for', 'with', 'trump' ...
+fake_words = " ".join(df[df["label"]==1]["text"].astype(str)).lower()
+fake_words = re.findall(r"\b[a-z]{3,}\b", fake_words)
+Counter(fake_words).most_common(20)   # all stopwords at the top
+```
+
+**Best Fix:**
+Apply the same stopword list used in preprocessing to make EDA findings match
+what the models actually learn from.
+
+```python
+from nltk.corpus import stopwords
+stop_words = set(stopwords.words("english"))
+
+fake_words = re.findall(r"\b[a-z]{3,}\b", fake_text_lower)
+fake_words = [w for w in fake_words if w not in stop_words]
+Counter(fake_words).most_common(20)
+```
+
+---
+
+### 🟠 HIGH — Issue #4: No TensorFlow/Keras Random Seed — Results Not Reproducible
+
+**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-1 (imports section)
 **Dimension:** AI-ML / Reproducibility
 
 **Problem:**
-`train_test_split` correctly uses `random_state=42`, but no global TF or NumPy seed is set before model construction and training. Keras weight initialization and dropout are both stochastic. Two runs of this notebook will produce different accuracy numbers, making academic comparison of results unreliable.
+The LSTM notebook sets `random_state=42` for `train_test_split` but never sets a
+TensorFlow global seed. Keras weight initialisation and dropout masking use
+TensorFlow's random state, so every run produces different weights and slightly
+different accuracy numbers. This makes it impossible to reproduce the results you
+report, and reviewers cannot verify your claims about LSTM performance.
 
 **Example of the problem:**
 ```python
-# No seed set anywhere before this
-model = Sequential([
-    Embedding(...),
-    LSTM(128, dropout=0.3, recurrent_dropout=0.3),
-    ...
-])
-model.fit(X_train_pad, y_train, epochs=3, ...)
+# random_state=42 only controls the data split, not model weights
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+# model.fit(...) uses random init — different each run
 ```
 
 **Best Fix:**
-Set all seeds at the top of the notebook, before any imports that use randomness.
+Add one line at the top of the imports cell:
 
 ```python
-import random, os, numpy as np, tensorflow as tf
-
-SEED = 42
-random.seed(SEED)
-np.random.seed(SEED)
-tf.random.set_seed(SEED)
-os.environ["PYTHONHASHSEED"] = str(SEED)
+import tensorflow as tf
+tf.random.set_seed(42)
 ```
 
 ---
 
-### 🟡 MEDIUM — Issue #3: No `EarlyStopping` — Model Undertrained
+### 🟠 HIGH — Issue #5: No Early Stopping — LSTM Is Still Improving at Final Epoch
 
-**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-9
-**Dimension:** AI-ML
+**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-9 (`model.fit`)
+**Dimension:** AI-ML / Correctness
 
 **Problem:**
-Training runs for exactly 3 epochs. The validation accuracy at epoch 3 is 95.07% and still climbing (epoch 1: 89.94%, epoch 2: 93.91%, epoch 3: 95.07%). The model has not converged. More epochs would improve accuracy, but training blindly risks overfitting. `EarlyStopping` solves both problems automatically.
+The LSTM is trained for a hardcoded 3 epochs. The validation accuracy at epoch 3
+is 0.9507, still trending upward from 0.8994 → 0.9391 → 0.9507, which means the
+model has not converged. It is likely under-trained. With only 3 epochs, the LSTM
+(0.9452 test accuracy) barely beats the much simpler Logistic Regression (0.9460),
+which weakens the model comparison required by the project spec and makes the
+"advanced model" look no better than the baseline.
 
 **Example of the problem:**
 ```python
 history = model.fit(
     X_train_pad, y_train,
-    epochs=3,           # arbitrary, still improving
+    epochs=3,           # hardcoded, model still improving
     batch_size=64,
     validation_split=0.1
 )
 ```
 
 **Best Fix:**
+Add `EarlyStopping` with `restore_best_weights=True` and increase `epochs` to
+let the model train until it actually converges.
+
 ```python
 from tensorflow.keras.callbacks import EarlyStopping
 
-early_stop = EarlyStopping(monitor="val_loss", patience=2, restore_best_weights=True)
+early_stop = EarlyStopping(
+    monitor="val_accuracy",
+    patience=3,
+    restore_best_weights=True
+)
 
 history = model.fit(
     X_train_pad, y_train,
-    epochs=20,          # high ceiling; early stopping exits when val_loss stops improving
+    epochs=15,
     batch_size=64,
     validation_split=0.1,
     callbacks=[early_stop]
@@ -126,333 +260,249 @@ history = model.fit(
 
 ---
 
-### 🟡 MEDIUM — Issue #4: EDA Word Frequency Analysis Not Filtered for Stopwords
-
-**Location:** `notebooks/00_eda.ipynb` — cell-13, cell-15, cell-17
-**Dimension:** Correctness / DS
-
-**Problem:**
-The most-common-words analysis shows "the", "and", "that", "for", "with" dominating both Fake and Real categories. These stopwords carry no discriminative signal. The plots and tables produced by this EDA are effectively useless because they show the same structure in both classes, obscuring the actual linguistic differences the project is trying to highlight.
-
-**Example of the problem:**
-```python
-fake_words = re.findall(r"\b[a-z]{3,}\b", fake_words)
-Counter(fake_words).most_common(20)
-# Top result: ('the', 793032) — zero discriminative value
-```
-
-**Best Fix:**
-```python
-from nltk.corpus import stopwords
-stop = set(stopwords.words("english"))
-
-fake_words = [w for w in re.findall(r"\b[a-z]{3,}\b", fake_text) if w not in stop]
-Counter(fake_words).most_common(20)
-# Now shows: trump, said, people, president, ... — actually meaningful
-```
-
----
-
-### 🟡 MEDIUM — Issue #5: `word_weight` Dict Rebuilt on Every `predict_lr()` Call
-
-**Location:** `ui.py` — `predict_lr()`, line 65
-**Dimension:** Performance
-
-**Problem:**
-Every time the user clicks "Analyze", `predict_lr()` rebuilds a 5000-entry dictionary from `tfidf.get_feature_names_out()` and `log_model.coef_[0]`. Both are static — they never change after models are loaded. This is pure wasted work on every button press.
-
-**Example of the problem:**
-```python
-def predict_lr(text):
-    vec = tfidf.transform([text])
-    proba = log_model.predict_proba(vec)[0]
-    word_weight = dict(zip(tfidf.get_feature_names_out(), log_model.coef_[0]))  # rebuilt every call
-    ...
-```
-
-**Best Fix:**
-Build it once at module load, alongside the models:
-
-```python
-log_model, tfidf, lstm_model, tokenizer = load_models()
-WORD_WEIGHT = dict(zip(tfidf.get_feature_names_out(), log_model.coef_[0]))
-
-def predict_lr(text):
-    vec = tfidf.transform([text])
-    proba = log_model.predict_proba(vec)[0]
-    reasons = sorted(
-        [(w, WORD_WEIGHT[w]) for w in text.lower().split() if w in WORD_WEIGHT],
-        key=lambda x: abs(x[1]), reverse=True
-    )[:8]
-    ...
-```
-
----
-
-### 🟡 MEDIUM — Issue #6: LSTM Model Saved in Deprecated HDF5 Format
+### 🟡 MEDIUM — Issue #6: Keras Model Saved in Deprecated HDF5 (.h5) Format
 
 **Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-19
-**Dimension:** Maintainability / AI-ML
+**Dimension:** Reliability / Maintainability
 
 **Problem:**
-`model.save("lstm_model.h5")` triggers a Keras deprecation warning: *"This file format is considered legacy."* The `.h5` format does not support all Keras 3 features. The native `.keras` format is safer, smaller, and forward-compatible.
+`model.save("../outputs/models/lstm_model.h5")` uses the legacy HDF5 format.
+Keras raises this warning at runtime: "This file format is considered legacy. We
+recommend using instead the native Keras format." The `.keras` format is more
+robust and is the standard going forward.
 
 **Example of the problem:**
 ```python
-model.save("../outputs/models/lstm_model.h5")
-# WARNING: You are saving your model as an HDF5 file...
-# This file format is considered legacy.
+model.save("../outputs/models/lstm_model.h5")   # deprecated, raises warning
 ```
 
 **Best Fix:**
 ```python
-model.save("../outputs/models/lstm_model.keras")
-```
-
-And in `ui.py`, update the load call:
-```python
-lstm_model = load_model("outputs/models/lstm_model.keras")
+model.save("../outputs/models/lstm_model.keras")  # native format, no warning
 ```
 
 ---
 
-### 🟡 MEDIUM — Issue #7: Single Train/Test Split — No Cross-Validation
+### 🟡 MEDIUM — Issue #7: Tokenizer Saved with `pickle` — Fragile Across Versions
 
-**Location:** `notebooks/02_LG_TF-IDF.ipynb` — cell-3; `notebooks/03_LSTM_GLOVE.ipynb` — cell-1
-**Dimension:** AI-ML
-
-**Problem:**
-Both models are evaluated on one fixed 80/20 split. The reported metrics (e.g., LR F1: 0.9394) are a single-sample estimate with unknown variance. A different `random_state` could produce a noticeably different number. For an academic comparison between two models, this means the difference in accuracy (LR: 94.60% vs LSTM: 94.52%) is not statistically meaningful — the models may perform identically on average.
-
-**Best Fix:**
-For LR (fast to train), use k-fold cross-validation:
-
-```python
-from sklearn.model_selection import StratifiedKFold, cross_val_score
-
-X_vec = tfidf.fit_transform(X)   # fit on all data for CV — or use Pipeline
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-scores = cross_val_score(model, X_vec, y, cv=cv, scoring="f1")
-print(f"F1: {scores.mean():.4f} ± {scores.std():.4f}")
-```
-
-For LSTM (expensive), at minimum try 3 different random seeds and report mean ± std.
-
----
-
-### 🟡 MEDIUM — Issue #8: Keras `validation_split` Is Not Stratified
-
-**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-9
-**Dimension:** AI-ML / Correctness
-
-**Problem:**
-`validation_split=0.1` takes the **last** 10% of the training array as the validation set, without shuffling or stratifying. If the data retains any ordering from the original concat (`fake_df` then `real_df`), this 10% slice could be heavily skewed toward one class, making validation loss a poor guide for early stopping and model selection.
-
-**Example of the problem:**
-```python
-model.fit(X_train_pad, y_train,
-          epochs=3,
-          validation_split=0.1)   # last 10% of X_train_pad — no stratification
-```
-
-**Best Fix:**
-Carve out a stratified validation set manually before training:
-
-```python
-from sklearn.model_selection import train_test_split
-
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X_train_pad, y_train, test_size=0.1, random_state=42, stratify=y_train
-)
-
-model.fit(X_tr, y_tr, epochs=20, batch_size=64,
-          validation_data=(X_val, y_val),
-          callbacks=[early_stop])
-```
-
----
-
-### 🟡 MEDIUM — Issue #9: `README.md` Is Empty
-
-**Location:** `README.md`
-**Dimension:** Maintainability
-
-**Problem:**
-The README contains no content. A grader or collaborator has no way to know: what the project does, how to install dependencies, how to run the notebooks in order, how to launch the UI, or where the raw data should be placed.
-
-**Best Fix:**
-Minimal README structure:
-
-```markdown
-# Fake News Detection
-
-Compares Logistic Regression (TF-IDF) vs LSTM (GloVe) for fake news classification.
-
-## Setup
-pip install -r requirements.txt
-
-## Run order
-1. Place Fake.csv / True.csv in data/raw/
-2. Place glove.6B.100d.txt in data/glove/
-3. Run notebooks in order: 00 → 01 → 02 → 03
-4. streamlit run ui.py
-```
-
----
-
-### 🟢 LOW — Issue #10: EDA Notebook Doesn't Drop Duplicates Before Analysis
-
-**Location:** `notebooks/00_eda.ipynb` — cell-3
-**Dimension:** Correctness / DS
-
-**Problem:**
-`notebooks/01_preprocessing.ipynb` calls `df.drop_duplicates()` but `00_eda.ipynb` does not. Word frequency counts in the EDA are therefore slightly inflated by duplicate articles. Minor for exploration, but creates an inconsistency between the EDA findings and the actual cleaned dataset.
-
-**Best Fix:**
-```python
-df = pd.concat([fake_df, real_df], ignore_index=True)
-df = df.drop_duplicates()   # add this line
-```
-
----
-
-### 🟢 LOW — Issue #11: Tokenizer Saved with `pickle` but Loaded with `joblib`
-
-**Location:** `notebooks/03_LSTM_GLOVE.ipynb` cell-19 (save) vs `ui.py` line 34 (load)
-**Dimension:** Maintainability
-
-**Problem:**
-The tokenizer is saved with `pickle.dump()` in the notebook but loaded with `joblib.load()` in the UI. This works because joblib falls back to pickle for non-numpy objects, but it's a hidden dependency on implementation detail. It also means `import pickle` in the notebook and `import joblib` in the UI for what is conceptually the same operation.
-
-**Best Fix:**
-Use `joblib` consistently in both places:
-
-```python
-# In notebook 03:
-import joblib
-joblib.dump(tokenizer, "../outputs/models/tokenizer.pkl")
-
-# In ui.py (already correct):
-tokenizer = joblib.load("outputs/models/tokenizer.pkl")
-```
-
----
-
-### 🟢 LOW — Issue #12: No Input Length Validation in UI
-
-**Location:** `ui.py` — `predict_lstm()`, line 73
+**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-19
 **Dimension:** Reliability
 
 **Problem:**
-A user who pastes a very long document (e.g., 10,000 words) triggers LSTM padding to 300 tokens (truncation happens silently), but first the tokenizer processes all 10,000 words. There is no feedback that the input was truncated, which could confuse users who input a long article and get a result based only on its first 300 tokens.
+`pickle.dump(tokenizer, f)` is version-sensitive — a tokenizer pickled with one
+TensorFlow/Keras version may fail to load under another. Keras provides built-in
+JSON serialisation for `Tokenizer` that is stable, human-readable, and the
+recommended approach.
+
+**Example of the problem:**
+```python
+import pickle
+with open("../outputs/models/tokenizer.pkl", "wb") as f:
+    pickle.dump(tokenizer, f)   # version-sensitive, opaque binary
+```
 
 **Best Fix:**
 ```python
-text = st.text_area("Enter News Article", value=st.session_state.get("text", ""), max_chars=5000)
+import json
+tokenizer_json = tokenizer.to_json()
+with open("../outputs/models/tokenizer.json", "w", encoding="utf-8") as f:
+    json.dump(tokenizer_json, f)
 
-# In predict_lstm, add a note if truncated:
-word_count = len(text.split())
-if word_count > MAXLEN:
-    st.caption(f"Note: input truncated from {word_count} to {MAXLEN} tokens for LSTM.")
+# To reload:
+from tensorflow.keras.preprocessing.text import tokenizer_from_json
+with open("../outputs/models/tokenizer.json") as f:
+    tokenizer = tokenizer_from_json(json.load(f))
 ```
 
 ---
 
-### 🔵 INFO — Issue #13: TF-IDF Has No `min_df` / `max_df` Filtering
+### 🟡 MEDIUM — Issue #8: Class Imbalance Not Addressed in Either Model
 
-**Location:** `notebooks/02_LG_TF-IDF.ipynb` — cell-3
+**Location:** `notebooks/02_LG_TF-IDF.ipynb` — cell-3; `notebooks/03_LSTM_GLOVE.ipynb` — cell-7
 **Dimension:** AI-ML
 
 **Problem:**
-`TfidfVectorizer(max_features=5000, ngram_range=(1,2))` keeps the top 5000 terms by raw frequency. This can include very rare terms (appearing once or twice) that act as noise, and very common cross-class terms that carry no signal. Adding `min_df` and `max_df` is a standard practice.
+The dataset has 34,618 Real vs 28,020 Fake articles (~55/45 split). Neither model
+applies `class_weight`. Without it, both models may subtly bias toward the majority
+class (Real), and the minority class (Fake) may have lower Recall than optimal.
+For a project that must report per-class Precision/Recall/F1, this is worth
+addressing.
+
+**Best Fix:**
+```python
+# LR (02_LG_TF-IDF.ipynb)
+model = LogisticRegression(max_iter=1000, class_weight="balanced")
+
+# LSTM (03_LSTM_GLOVE.ipynb)
+from sklearn.utils.class_weight import compute_class_weight
+import numpy as np
+
+class_weights = compute_class_weight("balanced", classes=np.unique(y_train), y=y_train)
+class_weight_dict = dict(enumerate(class_weights))
+
+history = model.fit(..., class_weight=class_weight_dict)
+```
+
+---
+
+### 🟢 LOW — Issue #9: `unique_word_ratio` Uses Non-Standard `+1` Denominator
+
+**Location:** `notebooks/01_preprocessing.ipynb` — cell-9
+**Dimension:** Correctness
+
+**Problem:**
+`unique_word_ratio` is computed as `len(set(words)) / (len(words) + 1)`. Since
+empty texts are already filtered above this line, the `+1` is unnecessary and
+introduces a small downward bias (a 1-word text gives 0.5 instead of 1.0).
+
+**Example of the problem:**
+```python
+df["unique_word_ratio"] = df["clean_text"].apply(
+    lambda x: len(set(x.split())) / (len(x.split()) + 1)  # biased for short texts
+)
+```
+
+**Best Fix:**
+```python
+df["unique_word_ratio"] = df["clean_text"].apply(
+    lambda x: len(set(x.split())) / len(x.split()) if x.split() else 0.0
+)
+```
+
+---
+
+### 🟢 LOW — Issue #10: Logistic Regression Uses Single Split with Default Hyperparameters
+
+**Location:** `notebooks/02_LG_TF-IDF.ipynb` — cell-3
+**Dimension:** AI-ML / Reliability
+
+**Problem:**
+The LR model uses a single 80/20 split with default `C=1.0` and no validation of
+whether that regularisation value is appropriate. A quick 5-fold CV check alongside
+the existing evaluation would give more reliable numbers for the report's comparison
+section.
+
+**Best Fix:**
+```python
+from sklearn.model_selection import cross_val_score
+
+cv_scores = cross_val_score(
+    LogisticRegression(max_iter=1000, class_weight="balanced"),
+    X_train_vec, y_train, cv=5, scoring="f1_macro"
+)
+print(f"CV F1: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
+```
+
+---
+
+### 🔵 INFO — Issue #11: GloVe Embeddings Frozen (`trainable=False`) May Limit LSTM Performance
+
+**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-7
+**Dimension:** AI-ML
+
+**Problem:**
+`trainable=False` means the GloVe vectors never update during training. Generic
+GloVe embeddings may not perfectly capture fake-news domain vocabulary (political
+jargon, clickbait phrasing). Allowing fine-tuning can improve accuracy.
 
 **Suggestion:**
 ```python
-tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1,2), min_df=5, max_df=0.95)
+Embedding(
+    input_dim=max_words,
+    output_dim=embedding_dim,
+    weights=[embedding_matrix],
+    trainable=True          # allow fine-tuning on this domain
+)
 ```
 
 ---
 
-### 🔵 INFO — Issue #14: `recurrent_dropout` Disables CuDNN Kernel
+### 🔵 INFO — Issue #12: No Model Versioning — Retraining Silently Overwrites Artifacts
 
-**Location:** `notebooks/03_LSTM_GLOVE.ipynb` — cell-7
-**Dimension:** Performance / AI-ML
-
-**Problem:**
-`LSTM(128, dropout=0.3, recurrent_dropout=0.3)` — using `recurrent_dropout` prevents Keras from using the fast CuDNN LSTM implementation. The training log already shows "GPU will not be used on native Windows," so this does not affect this run, but it would significantly slow training if the environment is later migrated to Linux with a GPU.
-
-**Suggestion:**
-If GPU performance becomes important, move to Linux/WSL2 and use `dropout` only (not `recurrent_dropout`), or apply dropout as a separate `Dropout` layer after the LSTM output.
-
----
-
-### 🔵 INFO — Issue #15: EDA and Preprocessing Both Re-load Raw CSVs
-
-**Location:** `notebooks/00_eda.ipynb` cell-3; `notebooks/01_preprocessing.ipynb` cell-3
-**Dimension:** Maintainability / DS
+**Location:** All model notebooks
+**Dimension:** AI-ML / Maintainability
 
 **Problem:**
-Both notebooks independently read `Fake.csv` and `True.csv` and reconstruct the same base DataFrame. This is a normal pattern for Jupyter notebooks (each notebook is self-contained), but it means any change to how raw data is assembled must be made in two places.
+Models are saved as flat files with no metadata (training date, hyperparameters,
+accuracy). If you retrain, the previous artifacts are silently overwritten, making
+it hard to trace which numbers in the report came from which run.
 
 **Suggestion:**
-Acceptable as-is for a notebook-based project. If the project grows, consider a shared `src/data_loader.py` module imported by both notebooks.
+Save a sidecar JSON with each model artifact:
 
----
+```python
+import json, datetime
 
+metadata = {
+    "trained_at": datetime.datetime.now().isoformat(),
+    "accuracy": float(accuracy_score(y_test, y_pred)),
+    "f1_macro": float(f1_score(y_test, y_pred, average="macro")),
+    "params": {"max_features": 5000, "ngram_range": "(1,2)"}
+}
+with open("../outputs/models/logistic_model_meta.json", "w") as f:
+    json.dump(metadata, f, indent=2)
+```
+
+────────────────────────────────────────────────────────────
 ## What's Done Well
+────────────────────────────────────────────────────────────
 
-- **Correct TF-IDF pipeline discipline** — `tfidf.fit_transform(X_train)` and `tfidf.transform(X_test)` are used correctly, with no data leakage from the test set into the vectorizer.
-- **Correct tokenizer discipline** — `tokenizer.fit_on_texts(X_train)` only, then `texts_to_sequences` on test separately. Train/test split is performed before tokenization.
-- **`stratify=y` in `train_test_split`** — both notebooks use stratified splitting, ensuring class balance is preserved in train and test sets.
-- **Streamlit caching applied correctly** — `@st.cache_resource` for models, `@st.cache_data` for data and CM predictions, preventing expensive reloads on every interaction.
-- **`show_result` correctly differentiates Fake vs Real** — uses `st.error` (red) for Fake and `st.success` (green) for Real rather than always showing green.
+- **Correct TF-IDF fit/transform split:** `tfidf.fit_transform(X_train)` and
+  `tfidf.transform(X_test)` — test data never touches the vectoriser fit.
 
----
+- **Correct tokenizer fit:** `tokenizer.fit_on_texts(X_train)` only — the LSTM
+  tokenizer is also correctly trained on training data alone, no leakage.
 
+- **Stratified split throughout:** Both model notebooks use `stratify=y` in
+  `train_test_split`, ensuring the class ratio is preserved in both partitions.
+
+- **Solid preprocessing pipeline:** `clean_text` in `01_preprocessing.ipynb`
+  covers lowercase, URL/email removal, punctuation stripping, number removal,
+  stopword filtering, and lemmatisation — all project requirements are met.
+
+- **Complete evaluation metrics:** Both models report Accuracy, Precision, Recall,
+  F1-score per class, and Confusion Matrix — exactly what the spec requires.
+
+- **Feature engineering included:** `word_count`, `char_count`, and
+  `unique_word_ratio` are computed and visualised in the preprocessing notebook,
+  showing genuine insight into structural differences between Fake and Real text.
+
+────────────────────────────────────────────────────────────
 ## Refactor Roadmap (Priority Order)
+────────────────────────────────────────────────────────────
 
-```
-P0 — Fix before submission:
-  [ ] Fill requirements.txt with all dependencies and versions
-  [ ] Add tf.random.set_seed(42) + np.random.seed(42) in notebook 03
+  P0 — Fix before submission:
+    [ ] Fix LR `explain` function to return top-N contributing words (Issue #1)
+    [ ] Fix LSTM `explain_text` to use perturbation-based word importance (Issue #2)
+    [ ] Remove stopwords from EDA word frequency analysis (Issue #3)
+    [ ] Add `tf.random.set_seed(42)` to LSTM notebook (Issue #4)
+    [ ] Add EarlyStopping + increase epochs in LSTM training (Issue #5)
 
-P1 — Fix this sprint:
-  [ ] Add EarlyStopping callback in LSTM training (notebook 03)
-  [ ] Filter stopwords in EDA word frequency analysis (notebook 00)
-  [ ] Move word_weight dict construction out of predict_lr() to module level (ui.py)
-  [ ] Save LSTM model as .keras format instead of .h5 (notebook 03)
-  [ ] Manually create stratified validation split instead of validation_split=0.1 (notebook 03)
-  [ ] Add cross-validation or multi-seed evaluation for LR model (notebook 02)
-  [ ] Write a minimal README.md with setup and run instructions
+  P1 — Fix this sprint:
+    [ ] Switch Keras model save to `.keras` format (Issue #6)
+    [ ] Replace pickle tokenizer save with `tokenizer.to_json()` (Issue #7)
+    [ ] Add `class_weight="balanced"` to LR; compute class weights for LSTM (Issue #8)
 
-P2 — Fix next time you touch this code:
-  [ ] Drop duplicates before EDA word analysis (notebook 00)
-  [ ] Standardize tokenizer save/load to joblib in both notebook and ui.py
-  [ ] Add input length feedback in UI when text is truncated at MAXLEN tokens
-```
+  P2 — Fix next time you touch this code:
+    [ ] Fix `unique_word_ratio` denominator formula (Issue #9)
+    [ ] Add 5-fold CV to LR for more reliable comparison numbers (Issue #10)
 
----
-
+────────────────────────────────────────────────────────────
 ## Domain-Specific Checklist
+────────────────────────────────────────────────────────────
 
 ### AI / ML
-- [x] Train/val/test split done before any preprocessing (both notebooks correct)
-- [ ] Random seeds set for reproducibility — missing `tf.random.set_seed()` in notebook 03
-- [x] Evaluation metric matches business objective — F1 + classification report used
-- [x] Model artifacts versioned and saved — joblib + keras save used
-- [ ] Validation split is stratified — `validation_split=0.1` is not stratified
-- [ ] Cross-validation used or multiple seeds reported
+  [x] Train/val/test split done before any fit-based preprocessing
+  [ ] Random seeds set for reproducibility (missing tf.random.set_seed in LSTM)
+  [x] Evaluation metric matches business objective (F1 + accuracy used)
+  [ ] Model artifacts versioned and logged (flat files only, no metadata)
+  [x] No data leakage: TF-IDF and tokenizer fit only on training data
+  [ ] Explainability functions return genuinely important words (currently broken)
 
 ### Performance
-- [x] Expensive model loads cached with `@st.cache_resource`
-- [x] Full-dataset CM predictions cached with `@st.cache_data`
-- [ ] `word_weight` dict computed once, not per-call
+  [x] No N+1 query patterns
+  [x] Text preprocessing batched via pandas apply
+  [ ] LSTM could be stronger with fine-tuned embeddings (trainable=True)
 
-### Reproducibility
-- [ ] `requirements.txt` populated
-- [ ] TF seed set before model construction
-- [ ] README explains run order and data setup
-
-```
 ══════════════════════════════════════════════════════════════
 ```

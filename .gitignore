@@ -1,0 +1,50 @@
+# Data
+data/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ML model artifacts
+outputs/models/*.pkl
+outputs/models/*.h5
+outputs/models/*.keras
+outputs/models/*.joblib
+outputs/models/*.pt
+outputs/models/*.pth
+
+# NLTK downloaded data
+nltk_data/
+
+# Environment variables
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs
+*.log
+logs/
