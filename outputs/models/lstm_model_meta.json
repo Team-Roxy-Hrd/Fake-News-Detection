@@ -1,0 +1,10 @@
+{
+  "trained_at": "2026-05-12T01:26:53.422334",
+  "accuracy": 0.9963677639046538,
+  "params": {
+    "max_words": 20000,
+    "max_len": 300,
+    "epochs": "early_stopped",
+    "batch_size": 64
+  }
+}

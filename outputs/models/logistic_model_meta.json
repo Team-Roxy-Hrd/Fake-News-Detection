@@ -1,0 +1,10 @@
+{
+  "trained_at": "2026-05-12T00:34:54.717311",
+  "accuracy": 0.9893303064699206,
+  "f1_macro": 0.9893184110794031,
+  "params": {
+    "max_features": 5000,
+    "ngram_range": "(1,2)",
+    "class_weight": "balanced"
+  }
+}

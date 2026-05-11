@@ -1,4 +1,5 @@
 import re
+import json
 import numpy as np
 import streamlit as st
 import pandas as pd
@@ -15,6 +16,7 @@ except ImportError:
 try:
     from tensorflow.keras.models import load_model
     from tensorflow.keras.preprocessing.sequence import pad_sequences
+    from tensorflow.keras.preprocessing.text import tokenizer_from_json
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
@@ -40,8 +42,9 @@ def load_models():
     lstm, tok = None, None
     if TF_AVAILABLE:
         try:
-            lstm = load_model("outputs/models/lstm_model.h5")
-            tok = joblib.load("outputs/models/tokenizer.pkl")
+            lstm = load_model("outputs/models/lstm_model.keras")
+            with open("outputs/models/tokenizer.json", encoding="utf-8") as f:
+                tok = tokenizer_from_json(json.load(f))
         except Exception:
             pass
 
@@ -183,9 +186,43 @@ elif lstm is None or tokenizer is None:
 
 # Sample picker
 SAMPLES = {
-    "Fake example": "BREAKING: You won't believe what they found! Scientists SHOCKED by unbelievable discovery mainstream media is hiding from you!",
-    "Real example": "The Federal Reserve raised interest rates by 0.25 percentage points on Wednesday, the eighth increase since March 2022.",
-    "Neutral example": "The president met with cabinet officials on Tuesday to discuss the proposed infrastructure spending bill.",
+    "Fake example": (
+        "SHOCK REPORT: Government Hiding Cure for Cancer to Protect Big Pharma Profits! "
+        "Whistleblowers from inside the FDA have come forward with explosive documents proving that a natural cure for all "
+        "forms of cancer has been suppressed for decades by corrupt government officials working hand-in-hand with pharmaceutical "
+        "giants. The miracle treatment, derived from a common household plant, has a 100% success rate according to insider sources "
+        "who risked their lives to expose the truth. Mainstream media refuses to cover this bombshell story because their corporate "
+        "owners receive billions in advertising revenue from the same drug companies profiting off your suffering. Share this "
+        "before it gets deleted! The globalist elite do not want you to see this. Doctors who have tried to publish findings were "
+        "threatened, fired, and silenced. One brave researcher was found dead under mysterious circumstances just days after "
+        "announcing a press conference. Wake up America — they are lying to you and your family members are dying because of it."
+    ),
+    "Real example": (
+        "Federal Reserve raises interest rates by quarter point, signals possible pause in hiking cycle. "
+        "The Federal Reserve raised its benchmark interest rate by a quarter of a percentage point on Wednesday, bringing it "
+        "to a range of 5.25 to 5.5 percent, the highest level in 22 years. Fed Chair Jerome Powell said policymakers would "
+        "continue to make decisions meeting by meeting based on incoming economic data, leaving open the possibility that the "
+        "central bank could hold rates steady at its next meeting in September. The move was widely expected by financial markets "
+        "and marks the eleventh rate increase since March 2022, when the Fed began its most aggressive tightening campaign in "
+        "four decades to bring down inflation that peaked above 9 percent last year. Inflation has since cooled to 3 percent "
+        "in June, still above the Fed's 2 percent target. Powell acknowledged the progress but emphasized that officials need "
+        "to see more evidence that price pressures are sustainably returning to target before considering rate cuts. "
+        "The S&P 500 index rose modestly following the announcement as investors interpreted Powell's remarks as a sign "
+        "the tightening cycle may be nearing its end."
+    ),
+    "Neutral example": (
+        "Senate committee advances bipartisan infrastructure bill after weeks of negotiations. "
+        "A bipartisan group of senators reached agreement on a roughly 1.2 trillion dollar infrastructure package on Tuesday, "
+        "clearing a key procedural hurdle after weeks of tense negotiations over how to pay for roads, bridges, broadband "
+        "internet and other public works projects. The bill passed out of committee by a vote of 69 to 30, with 19 Republicans "
+        "joining all 50 Democrats in moving the legislation forward. Senate Majority Leader Chuck Schumer said he hoped to "
+        "bring the bill to a full floor vote before the August recess. The package allocates 550 billion dollars in new federal "
+        "spending on top of existing transportation funding, including 110 billion for roads and bridges, 73 billion to upgrade "
+        "the power grid, 65 billion for broadband expansion and 39 billion to modernize public transit systems. President Biden, "
+        "who helped broker the deal, called it a historic investment that would create millions of good-paying jobs. "
+        "The White House acknowledged that a separate, larger social spending bill would still be needed to fulfill broader "
+        "campaign promises on climate and social programs."
+    ),
 }
 
 if "article_text" not in st.session_state:
